@@ -188,7 +188,7 @@ static int recv_screen(calc_handle * handle) {
     unsigned int format;
     int err;
 
-    printf("Choose a format (for Prime, usually 8 to 11):");
+    printf("Choose a format (for Prime, usually 8 to 11): ");
 
     err = scanf("%u", &format);
     if (err >= 1) {
@@ -316,7 +316,7 @@ static int recv_file(calc_handle * handle) {
     printf("\nEnter input filename (without computer-side extension): ");
     err = scanf("%" xstr(FILES_VARNAME_MAXLEN) "ls", filename);
     if (err >= 1) {
-        printf("Enter file type:");
+        printf("Enter file type: ");
 
         err = scanf("%10s", typestr);
         if (err >= 1) {
@@ -383,7 +383,7 @@ static int send_key(calc_handle * handle) {
     int err;
     unsigned int type;
 
-    printf("Enter key ID:");
+    printf("Enter key ID: ");
     err = scanf("%u", &type);
     if (err >= 1) {
         res = hpcalcs_calc_send_key(handle, type);
@@ -395,6 +395,7 @@ static int send_key(calc_handle * handle) {
         }
     }
     else {
+        fflush(stdin);
         printf("Canceled\n");
     }
 
@@ -438,7 +439,7 @@ static int vpkt_send_experiments(calc_handle * handle) {
     int err;
     unsigned int id;
 
-    printf("Enter ID:");
+    printf("Enter command ID: ");
     err = scanf("%u", &id);
     if (err >= 1) {
         prime_vtl_pkt * pkt = prime_vtl_pkt_new(2);
@@ -506,52 +507,101 @@ static const FNCT_MENU fnct_menu[NITEMS] = {
 };
 
 int main(int argc, char **argv) {
-    cable_model model1 = CABLE_PRIME_HID;
-    calc_model model2 = CALC_PRIME;
+    cable_model model1 = CABLE_NUL;
+    calc_model model2 = CALC_NONE;
     cable_handle * cable;
     calc_handle * calc;
-    int res;
+    int res = 1;
+    uint8_t * probed_cables = NULL;
 
     // Set stdout and stderr to unbuffered mode.
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
-    // init libs
-    res = hpfiles_init(output_log_callback);
-    if (res) {
-        return 1;
+    // Init libraries
+    if (hpfiles_init(output_log_callback)) {
+        goto final_teardown;
     }
-    res = hpcables_init(output_log_callback);
-    if (res) {
-        return 1;
+    if (hpcables_init(output_log_callback)) {
+        goto final_teardown;
     }
-    res = hpcalcs_init(output_log_callback);
-    if (res) {
-        return 1;
+    if (hpcalcs_init(output_log_callback)) {
+        goto final_teardown;
     }
-    res = hpopers_init(output_log_callback);
-    if (res) {
-        return 1;
+    if (hpopers_init(output_log_callback)) {
+        goto final_teardown;
     }
 
-    // TODO: probe cables and calculators.
+    if (model1 == CABLE_NUL) {
+        // Probe cables and calculators.
+        res = hpcables_probe_cables(&probed_cables);
+        if (res == 0) {
+            fprintf(stderr, "Found no usable cables (?!): exiting\n");
+            res = 1;
+            goto final_teardown;
+        }
+        else if (res == 1) {
+            // This means that the null cable is the only usable cable. Fall through.
+            model1 = CABLE_NUL;
+            hpcables_probe_free(probed_cables);
+        }
+        else {
+            int err;
+
+            fprintf(stderr, "hpcables_probe_cables found %d cables\n", res);
+            hpcables_probe_display(probed_cables);
+            hpcables_probe_free(probed_cables);
+
+            printf("Enter the ID of the cable you want to use: ");
+
+            err = scanf("%u", &model1);
+            if (err < 1) {
+                fflush(stdin);
+                printf("Canceled, exiting program\n");
+                res = 1;
+                goto final_teardown;
+            }
+        }
+    }
+
+    if (model1 == CABLE_NUL) {
+        fprintf(stderr, "NOTE: null cable selected, the program won't do much in the way of useful things !\n");
+    }
 
     cable = hpcables_handle_new(model1);
     if (cable == NULL) {
         fprintf(stderr, "hpcables_handle_new failed\n");
+        res = 1;
+        goto final_teardown;
+    }
+
+    res = hpcalcs_probe_calc(model1, &model2);
+    if (res != 0) {
+        fprintf(stderr, "hpcalcs_probe_calc failed\n");
+        res = 1;
         goto final_teardown;
     }
 
     calc = hpcalcs_handle_new(model2);
     if (calc == NULL) {
         fprintf(stderr, "hpcalcs_handle_new failed\n");
+        res = 1;
         goto del_cable;
     }
 
     // attach cable to calc (and open cable)
     res = hpcalcs_cable_attach(calc, cable);
     if (res) {
+        res = 1;
         goto del_calc;
+    }
+
+    if (model1 == CABLE_NUL) {
+        fprintf(stderr, "NOTE: null cable selected, the program won't do much in the way of useful things !\n");
+    }
+
+    if (model2 == CALC_NONE) {
+        fprintf(stderr, "NOTE: null calculator selected, the program won't do much in the way of useful things !\n");
     }
 
     do
@@ -614,5 +664,5 @@ final_teardown:
     hpfiles_exit();
 
     printf("Goodbye world!\n");
-    return 0;
+    return res;
 }

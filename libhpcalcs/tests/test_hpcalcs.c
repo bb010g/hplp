@@ -73,6 +73,10 @@ static void output_log_callback(const char *format, va_list args) {
 #endif
 }
 
+static void output_log_callback2(const char *format, va_list args) {
+    vprintf(format, args);
+}
+
 // NOTE: this triplet of crude routines is just for demo and testing purposes !!
 // In the general case, a proper i18n library (not offered by the C standard library) should be used !
 static void crude_convert_UTF16LE_to_8bit(const char16_t * input, char * output) {
@@ -549,7 +553,10 @@ int main(int argc, char **argv) {
             int err;
 
             fprintf(stderr, "hpcables_probe_cables found %d cables\n", res);
+            // FIXME make this better some day.
+            hpcables_log_set_callback(output_log_callback2);
             hpcables_probe_display(probed_cables);
+            hpcables_log_set_callback(output_log_callback);
             hpcables_probe_free(probed_cables);
 
             printf("Enter the ID of the cable you want to use: ");

@@ -22,7 +22,7 @@
  */
 
 /**
- * \file link_prime_hid.c Cables: Prime HID cable.
+ * \file link_39gII_hid.c Cables: 39gII HID cable.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -38,14 +38,14 @@
 #include "logging.h"
 #include "error.h"
 
-extern const cable_fncts cable_prime_hid_fncts;
+extern const cable_fncts cable_39gII_hid_fncts;
 
-static int cable_prime_hid_probe(cable_handle * handle) {
+static int cable_39gII_hid_probe(cable_handle * handle) {
     int res;
     // In fact, we're not using handle here, but let's nevertheless flag misuse of the API.
     if (handle != NULL) {
         // Enumerating the device seems to do the job.
-        struct hid_device_info * info = hid_enumerate(USB_VID_HP, USB_PID_PRIME);
+        struct hid_device_info * info = hid_enumerate(USB_VID_HP, USB_PID_39gII);
         if (info != NULL) {
             hid_free_enumeration(info);
             res = ERR_SUCCESS;
@@ -63,14 +63,14 @@ static int cable_prime_hid_probe(cable_handle * handle) {
     return res;
 }
 
-static int cable_prime_hid_open(cable_handle * handle) {
+static int cable_39gII_hid_open(cable_handle * handle) {
     int res;
     if (handle != NULL) {
-        hid_device * device_handle = hid_open(USB_VID_HP, USB_PID_PRIME, NULL);
+        hid_device * device_handle = hid_open(USB_VID_HP, USB_PID_39gII, NULL);
         if (device_handle) {
-            handle->model = CABLE_PRIME_HID;
+            handle->model = CABLE_39gII_HID;
             handle->handle = (void *)device_handle;
-            handle->fncts = &cable_prime_hid_fncts;
+            handle->fncts = &cable_39gII_hid_fncts;
             handle->read_timeout = 2000;
             handle->open = 1;
             handle->busy = 0;
@@ -89,7 +89,7 @@ static int cable_prime_hid_open(cable_handle * handle) {
     return res;
 }
 
-static int cable_prime_hid_close(cable_handle * handle) {
+static int cable_39gII_hid_close(cable_handle * handle) {
     int res;
     if (handle != NULL) {
         hid_device * device_handle = (hid_device *)handle->handle;
@@ -120,10 +120,9 @@ static int cable_prime_hid_close(cable_handle * handle) {
     return res;
 }
 
-static int cable_prime_hid_set_read_timeout(cable_handle * handle, int read_timeout) {
+static int cable_39gII_hid_set_read_timeout(cable_handle * handle, int read_timeout) {
     int res;
     if (handle != NULL) {
-        res = ERR_SUCCESS;
         handle->read_timeout = read_timeout;
     }
     else {
@@ -134,7 +133,7 @@ static int cable_prime_hid_set_read_timeout(cable_handle * handle, int read_time
 }
 
 
-static int cable_prime_hid_send(cable_handle * handle, uint8_t * data, uint32_t len) {
+static int cable_39gII_hid_send(cable_handle * handle, uint8_t * data, uint32_t len) {
     int res;
     if (handle != NULL && data != NULL) {
         hid_device * device_handle = (hid_device *)handle->handle;
@@ -167,7 +166,7 @@ static int cable_prime_hid_send(cable_handle * handle, uint8_t * data, uint32_t 
     return res;
 }
 
-static int cable_prime_hid_recv(cable_handle * handle, uint8_t ** data, uint32_t * len) {
+static int cable_39gII_hid_recv(cable_handle * handle, uint8_t ** data, uint32_t * len) {
     int res;
     // Use pre-allocated area pointed to by data.
     if (handle != NULL && data != NULL && *data != NULL && len != NULL) {
@@ -202,15 +201,15 @@ static int cable_prime_hid_recv(cable_handle * handle, uint8_t ** data, uint32_t
     return res;
 }
 
-const cable_fncts cable_prime_hid_fncts =
+const cable_fncts cable_39gII_hid_fncts =
 {
-    CABLE_PRIME_HID,
-    "Prime HID cable",
-    "Prime HID cable",
-    &cable_prime_hid_probe,
-    &cable_prime_hid_open,
-    &cable_prime_hid_close,
-    &cable_prime_hid_set_read_timeout,
-    &cable_prime_hid_send,
-    &cable_prime_hid_recv
+    CABLE_39gII_HID,
+    "39gII HID cable",
+    "39gII HID cable",
+    &cable_39gII_hid_probe,
+    &cable_39gII_hid_open,
+    &cable_39gII_hid_close,
+    &cable_39gII_hid_set_read_timeout,
+    &cable_39gII_hid_send,
+    &cable_39gII_hid_recv
 };

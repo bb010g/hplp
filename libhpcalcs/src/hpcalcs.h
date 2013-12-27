@@ -337,6 +337,14 @@ HPEXPORT int HPCALL hpcalcs_probe_calc(cable_model cable, calc_model * out_calc)
  */
 HPEXPORT prime_vtl_pkt * HPCALL prime_vtl_pkt_new(uint32_t size);
 /**
+ * \brief Creates a virtual packet for the Prime calculator, filling it with the given size and data.
+ * \param size the size of the data.
+ * \param data the pre-allocated data (assumed to have been allocated through malloc/calloc).
+ * \return NULL if an error occurred, a virtual packet otherwise.
+ * \warning This function takes ownership of \a data.
+ */
+HPEXPORT prime_vtl_pkt * HPCALL prime_vtl_pkt_new_with_data_ptr(uint32_t size, uint8_t * data);
+/**
  * \brief Deletes a virtual packet for the Prime calculator.
  * \param pkt the packet to be deleted.
  */
@@ -356,6 +364,14 @@ HPEXPORT int HPCALL prime_send_data(calc_handle * handle, prime_vtl_pkt * pkt);
  * \return 0 upon success, nonzero otherwise.
  */
 HPEXPORT int HPCALL prime_recv_data(calc_handle * handle, prime_vtl_pkt * pkt);
+/**
+ * \brief Returns the packet size corresponding to command \a cmd, possibly corrected by the contents of \a data.
+ * \param cmd the command.
+ * \param data the data.
+ * \param size storage area for size of the data.
+ * \return 0 upon success, nonzero otherwise.
+ */
+HPEXPORT int HPCALL prime_data_size(uint8_t cmd, uint8_t * data, uint32_t * out_size);
 
 
 /**

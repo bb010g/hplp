@@ -85,33 +85,119 @@ static inline uint16_t crc16_block(const uint8_t * buffer, uint32_t len) {
 
 static int read_vtl_pkt(calc_handle * handle, uint8_t cmd, prime_vtl_pkt ** pkt, int packet_contains_header) {
     int res;
+    cable_handle * cable;
     (void)packet_contains_header;
-    *pkt = prime_vtl_pkt_new(0);
-    if (*pkt != NULL) {
-        (*pkt)->cmd = cmd;
-        res = prime_recv_data(handle, *pkt);
-        if (res == ERR_SUCCESS) {
-            if ((*pkt)->size > 0) {
-                if ((*pkt)->data[0] == (*pkt)->cmd) {
-                    hpcalcs_debug("%s: command matches returned data", __FUNCTION__);
+
+    // Use different code paths for retrieving data, depending on the model.
+    cable = hpcalcs_cable_get(handle);
+    if (cable != NULL) {
+        cable_model model = hpcables_get_model(cable);
+        if (model == CABLE_PRIME_HID) {
+            // Real Prime calculators need fragmentation.
+            *pkt = prime_vtl_pkt_new(0);
+            if (*pkt != NULL) {
+                (*pkt)->cmd = cmd;
+                res = prime_recv_data(handle, *pkt);
+                // prime_recv_data takes care of setting (*pkt)->size.
+                if (res == ERR_SUCCESS) {
+                    if ((*pkt)->size > 0) {
+                        if ((*pkt)->data[0] == (*pkt)->cmd) {
+                            hpcalcs_debug("%s: command matches returned data", __FUNCTION__);
+                        }
+                        else {
+                            hpcalcs_debug("%s: command does not match returned data", __FUNCTION__);
+                            // It's not necessarily an error.
+                        }
+                    }
+                    else {
+                        hpcalcs_info("%s: empty packet", __FUNCTION__);
+                    }
                 }
                 else {
-                    hpcalcs_debug("%s: command does not match returned data", __FUNCTION__);
-                    // It's not necessarily an error.
+                    prime_vtl_pkt_del(*pkt);
+                    *pkt = NULL;
                 }
             }
             else {
-                hpcalcs_info("%s: empty packet", __FUNCTION__);
+                res = ERR_MALLOC;
+                hpcalcs_error("%s: couldn't create packet", __FUNCTION__);
+            }
+        }
+        else if (model == CABLE_PRIME_EMU) {
+            // Virtual Prime calculators don't need fragmentation.
+            uint32_t size = 10240;
+            uint8_t * data = (uint8_t *)calloc(1, size);
+            if (data != NULL) {
+                // data might be reallocated by hpcables_cable_recv.
+                res = hpcables_cable_recv(cable, &data, &size);
+                if (res == ERR_SUCCESS) {
+                    if (size > 0) {
+                        uint32_t expected_size = 0;
+                        hpcalcs_info("%s: non-empty packet", __FUNCTION__);
+                        res = prime_data_size(cmd, data, &expected_size);
+                        if (res != ERR_SUCCESS || size != expected_size) {
+                            hpcalcs_error("%s: failed to determine packet size, or it does not match expectations", __FUNCTION__);
+                        }
+                        else {
+                            size = expected_size;
+                        }
+
+                        *pkt = prime_vtl_pkt_new_with_data_ptr(size, data);
+                        if (*pkt != NULL) {
+                            hpcalcs_info("%s: created vpkt", __FUNCTION__);
+                        }
+                        else {
+                            res = ERR_MALLOC;
+                            hpcalcs_error("%s: couldn't create packet", __FUNCTION__);
+                        }
+                    }
+                    else {
+                        hpcalcs_info("%s: empty packet", __FUNCTION__);
+                    }
+                }
+                else {
+                    hpcalcs_error("%s: failed to read from cable", __FUNCTION__);
+                }
+            }
+            else {
+                res = ERR_MALLOC;
+                hpcalcs_error("%s: couldn't create buffer", __FUNCTION__);
             }
         }
         else {
-            prime_vtl_pkt_del(*pkt);
-            *pkt = NULL;
+            res = ERR_INVALID_MODEL;
+            hpcalcs_error("%s: unhandled model", __FUNCTION__);
         }
     }
     else {
-        res = ERR_MALLOC;
-        hpcalcs_error("%s: couldn't create packet", __FUNCTION__);
+        res = ERR_CALC_NO_CABLE;
+        hpcalcs_error("%s: couldn't obtain cable", __FUNCTION__);
+    }
+    return res;
+}
+
+static int write_vtl_pkt(calc_handle * handle, prime_vtl_pkt * pkt) {
+    int res;
+    // Use different code paths for submitting data, depending on the model.
+    cable_handle * cable = hpcalcs_cable_get(handle);
+    if (cable != NULL) {
+        cable_model model = hpcables_get_model(cable);
+        if (model == CABLE_PRIME_HID) {
+            // Real Prime calculators need fragmentation.
+            res = prime_send_data(handle, pkt);
+        }
+        else if (model == CABLE_PRIME_EMU) {
+            // Virtual Prime calculators don't need fragmentation.
+            res = hpcables_cable_send(cable, pkt->data, pkt->size);
+        }
+        else {
+            res = ERR_INVALID_MODEL;
+            hpcalcs_error("%s: unhandled model", __FUNCTION__);
+        }
+    }
+    else {
+        res = ERR_CALC_NO_CABLE;
+        hpcalcs_error("%s: couldn't obtain cable", __FUNCTION__);
     }
     return res;
 }
@@ -119,16 +205,14 @@ static int read_vtl_pkt(calc_handle * handle, uint8_t cmd, prime_vtl_pkt ** pkt,
 HPEXPORT int HPCALL calc_prime_s_check_ready(calc_handle * handle) {
     int res;
     if (handle != NULL) {
-        prime_vtl_pkt * pkt = prime_vtl_pkt_new(2);
+        prime_vtl_pkt * pkt = prime_vtl_pkt_new(1);
         if (pkt != NULL) {
             uint8_t * ptr;
 
             pkt->cmd = CMD_PRIME_CHECK_READY;
             ptr = pkt->data;
-//            *ptr++ = 0x00; // Report number
-//            *ptr++ = 0x00; // ?
             *ptr++ = CMD_PRIME_CHECK_READY;
-            res = prime_send_data(handle, pkt);
+            res = write_vtl_pkt(handle, pkt);
             prime_vtl_pkt_del(pkt);
         }
         else {
@@ -151,17 +235,10 @@ HPEXPORT int HPCALL calc_prime_r_check_ready(calc_handle * handle, uint8_t ** ou
         if (res == ERR_SUCCESS && pkt != NULL) {
             if (out_data != NULL && out_size != NULL) {
                 *out_size = pkt->size;
-                *out_data = malloc(pkt->size);
-                if (*out_data != NULL) {
-                    memcpy(*out_data, pkt->data, pkt->size);
-                    res = 0;
-                }
-                else {
-                    res = ERR_MALLOC;
-                    hpcalcs_error("%s: couldn't allocate memory", __FUNCTION__);
-                }
+                *out_data = pkt->data; // Transfer ownership of the memory block to the caller.
+                pkt->data = NULL; // Detach it from virtual packet.
             }
-            // else do nothing. res is already 0.
+            // else do nothing. res is already ERR_SUCCESS.
             prime_vtl_pkt_del(pkt);
         }
         else {
@@ -178,16 +255,14 @@ HPEXPORT int HPCALL calc_prime_r_check_ready(calc_handle * handle, uint8_t ** ou
 HPEXPORT int HPCALL calc_prime_s_get_infos (calc_handle * handle) {
     int res;
     if (handle != NULL) {
-        prime_vtl_pkt * pkt = prime_vtl_pkt_new(2);
+        prime_vtl_pkt * pkt = prime_vtl_pkt_new(1);
         if (pkt != NULL) {
             uint8_t * ptr;
 
             pkt->cmd = CMD_PRIME_GET_INFOS;
             ptr = pkt->data;
-//            *ptr++ = 0x00; // Report number
-//            *ptr++ = 0x00; // ?
             *ptr++ = CMD_PRIME_GET_INFOS;
-            res = prime_send_data(handle, pkt);
+            res = write_vtl_pkt(handle, pkt);
             prime_vtl_pkt_del(pkt);
         }
         else {
@@ -207,20 +282,13 @@ HPEXPORT int HPCALL calc_prime_r_get_infos (calc_handle * handle, calc_infos * i
     if (handle != NULL) {
         prime_vtl_pkt * pkt;
         res = read_vtl_pkt(handle, CMD_PRIME_GET_INFOS, &pkt, 1);
-        if (res == 0 && pkt != NULL) {
+        if (res == ERR_SUCCESS && pkt != NULL) {
             if (infos != NULL) {
                 infos->size = pkt->size;
-                infos->data = malloc(pkt->size);
-                if (infos->data != NULL) {
-                    memcpy(infos->data, pkt->data, pkt->size);
-                    res = ERR_SUCCESS;
-                }
-                else {
-                    res = ERR_MALLOC;
-                    hpcalcs_error("%s: couldn't allocate memory", __FUNCTION__);
-                }
+                infos->data = pkt->data; // Transfer ownership of the memory block to the caller.
+                pkt->data = NULL; // Detach it from virtual packet.
             }
-            // else do nothing. res is already 0.
+            // else do nothing. res is already ERR_SUCCESS.
             prime_vtl_pkt_del(pkt);
         }
         else {
@@ -246,8 +314,6 @@ HPEXPORT int HPCALL calc_prime_s_set_date_time(calc_handle * handle, time_t time
 
                 pkt->cmd = CMD_PRIME_SET_DATE_TIME;
                 ptr = pkt->data;
-//                *ptr++ = 0x00; // Report number
-//                *ptr++ = 0x00; // ?
                 *ptr++ = CMD_PRIME_SET_DATE_TIME;
                 *ptr++ = 0x01;
                 *ptr++ = (uint8_t)((size >> 24) & 0xFF);
@@ -264,7 +330,7 @@ HPEXPORT int HPCALL calc_prime_s_set_date_time(calc_handle * handle, time_t time
                 *ptr++ = brokendowntime->tm_hour;
                 *ptr++ = brokendowntime->tm_min;
                 *ptr++ = brokendowntime->tm_sec;
-                res = prime_send_data(handle, pkt);
+                res = write_vtl_pkt(handle, pkt);
                 prime_vtl_pkt_del(pkt);
             }
             else {
@@ -287,7 +353,7 @@ HPEXPORT int HPCALL calc_prime_s_set_date_time(calc_handle * handle, time_t time
 HPEXPORT int HPCALL calc_prime_r_set_date_time(calc_handle * handle) {
     int res = 0;
     if (handle != NULL) {
-        // There doesn't seem anything to do.
+        // There doesn't seem to be anything to do.
         //res = calc_prime_r_check_ready(handle, NULL, NULL);
     }
     else {
@@ -299,17 +365,15 @@ HPEXPORT int HPCALL calc_prime_r_set_date_time(calc_handle * handle) {
 HPEXPORT int HPCALL calc_prime_s_recv_screen(calc_handle * handle, calc_screenshot_format format) {
     int res;
     if (handle != NULL) {
-        prime_vtl_pkt * pkt = prime_vtl_pkt_new(3);
+        prime_vtl_pkt * pkt = prime_vtl_pkt_new(2);
         if (pkt != NULL) {
             uint8_t * ptr;
 
             pkt->cmd = CMD_PRIME_RECV_SCREEN;
             ptr = pkt->data;
-//            *ptr++ = 0x00; // Report number
-//            *ptr++ = 0x00; // ?
             *ptr++ = CMD_PRIME_RECV_SCREEN;
             *ptr++ = (uint8_t)format;
-            res = prime_send_data(handle, pkt);
+            res = write_vtl_pkt(handle, pkt);
             prime_vtl_pkt_del(pkt);
         }
         else {
@@ -329,7 +393,7 @@ HPEXPORT int HPCALL calc_prime_r_recv_screen(calc_handle * handle, calc_screensh
     if (handle != NULL) {
         prime_vtl_pkt * pkt;
         res = read_vtl_pkt(handle, CMD_PRIME_RECV_SCREEN, &pkt, 1);
-        if (res == 0 && pkt != NULL) {
+        if (res == ERR_SUCCESS && pkt != NULL) {
             if (pkt->size > 13) {
                 // Packet has CRC
                 uint16_t computed_crc; // 0x0000 ?
@@ -348,19 +412,12 @@ HPEXPORT int HPCALL calc_prime_r_recv_screen(calc_handle * handle, calc_screensh
                 // Skip marker.
                 if (pkt->data[8] == (uint8_t)format && pkt->data[9] == 0xFF && pkt->data[10] == 0xFF && pkt->data[11] == 0xFF && pkt->data[12] == 0xFF) {
                     if (out_data != NULL && out_size != NULL) {
-                        uint32_t size = pkt->size - 13;
-                        *out_size = size;
-                        *out_data = malloc(size);
-                        if (*out_data != NULL) {
-                            memcpy(*out_data, pkt->data + 13, size);
-                            res = ERR_SUCCESS;
-                        }
-                        else {
-                            res = ERR_MALLOC;
-                            hpcalcs_error("%s: couldn't allocate memory", __FUNCTION__);
-                        }
+                        *out_size = pkt->size - 13;
+                        memmove(pkt->data, pkt->data + 13, pkt->size - 13);
+                        *out_data = pkt->data; // Transfer ownership of the memory block to the caller.
+                        pkt->data = NULL; // Detach it from virtual packet.
                     }
-                    // else do nothing. res is already 0.
+                    // else do nothing. res is already ERR_SUCCESS.
                 }
                 else {
                     res = ERR_CALC_PACKET_FORMAT;
@@ -408,8 +465,6 @@ HPEXPORT int HPCALL calc_prime_s_send_file(calc_handle * handle, files_var_entry
 
             pkt->cmd = CMD_PRIME_RECV_FILE;
             ptr = pkt->data;
-//            *ptr++ = 0x00; // Report number
-//            *ptr++ = 0x00; // ?
             *ptr++ = CMD_PRIME_RECV_FILE;
             *ptr++ = 0x01;
             *ptr++ = (uint8_t)((size >> 24) & 0xFF);
@@ -426,7 +481,7 @@ HPEXPORT int HPCALL calc_prime_s_send_file(calc_handle * handle, files_var_entry
             crc16 = crc16_block(pkt->data, size); // Yup, the last 6 bytes of the packet are excluded from the CRC.
             pkt->data[8] = crc16 & 0xFF;
             pkt->data[9] = (crc16 >> 8) & 0xFF;
-            res = prime_send_data(handle, pkt);
+            res = write_vtl_pkt(handle, pkt);
 
             prime_vtl_pkt_del(pkt);
         }
@@ -468,8 +523,6 @@ HPEXPORT int HPCALL calc_prime_s_recv_file(calc_handle * handle, files_var_entry
 
             pkt->cmd = CMD_PRIME_RECV_FILE;
             ptr = pkt->data;
-//            *ptr++ = 0x00; // Report number
-//            *ptr++ = 0x00; // ?
             *ptr++ = CMD_PRIME_REQ_FILE;
             *ptr++ = 0x01;
             *ptr++ = (uint8_t)((size >> 24) & 0xFF);
@@ -484,7 +537,7 @@ HPEXPORT int HPCALL calc_prime_s_recv_file(calc_handle * handle, files_var_entry
             crc16 = crc16_block(pkt->data, size); // Yup, the last 6 bytes are excluded from the CRC.
             pkt->data[8] = crc16 & 0xFF;
             pkt->data[9] = (crc16 >> 8) & 0xFF;
-            res = prime_send_data(handle, pkt);
+            res = write_vtl_pkt(handle, pkt);
             
             prime_vtl_pkt_del(pkt);
         }
@@ -506,7 +559,7 @@ HPEXPORT int HPCALL calc_prime_r_recv_file(calc_handle * handle, files_var_entry
     // TODO: if no file was received, have *out_file = NULL, but res = 0.
     if (handle != NULL) {
         res = read_vtl_pkt(handle, CMD_PRIME_RECV_FILE, &pkt, 1);
-        if (res == 0 && pkt != NULL) {
+        if (res == ERR_SUCCESS && pkt != NULL) {
             if (pkt->size >= 11) {
                 // Packet has CRC
                 uint16_t computed_crc; // 0x0000 ?
@@ -524,18 +577,20 @@ HPEXPORT int HPCALL calc_prime_r_recv_file(calc_handle * handle, files_var_entry
                 if (out_file != NULL) {
                     uint8_t namelen;
                     uint32_t size;
+                    uint8_t filetype;
 
                     *out_file = NULL;
+                    filetype = pkt->data[6];
                     namelen = pkt->data[7];
                     size = pkt->size - 10 - namelen;
 
                     if (!(size & UINT32_C(0x80000000))) {
                         *out_file = hpfiles_ve_create_with_data(&pkt->data[10 + namelen], size);
                         if (*out_file != NULL) {
-                            (*out_file)->type = pkt->data[6];
+                            (*out_file)->type = filetype;
                             memcpy((*out_file)->name, &pkt->data[10], namelen);
                             (*out_file)->invalid = (computed_crc != embedded_crc);
-                            hpcalcs_info("%s: created entry for %ls with size %" PRIu32 " and type %02X", __FUNCTION__, (*out_file)->name, (*out_file)->size, (*out_file)->type);
+                            hpcalcs_info("%s: created entry for %ls with size %" PRIu32 " and type %02X", __FUNCTION__, (*out_file)->name, (*out_file)->size, filetype);
                         }
                         else {
                             res = ERR_MALLOC;
@@ -561,7 +616,6 @@ HPEXPORT int HPCALL calc_prime_r_recv_file(calc_handle * handle, files_var_entry
                     *out_file = NULL;
                 }
             }
-            // else do nothing. res is already 0.
             prime_vtl_pkt_del(pkt);
         }
         else {
@@ -578,16 +632,14 @@ HPEXPORT int HPCALL calc_prime_r_recv_file(calc_handle * handle, files_var_entry
 HPEXPORT int HPCALL calc_prime_s_recv_backup(calc_handle * handle) {
     int res;
     if (handle != NULL) {
-        prime_vtl_pkt * pkt = prime_vtl_pkt_new(2);
+        prime_vtl_pkt * pkt = prime_vtl_pkt_new(1);
         if (pkt != NULL) {
             uint8_t * ptr;
 
             pkt->cmd = CMD_PRIME_RECV_FILE;
             ptr = pkt->data;
-//            *ptr++ = 0x00; // Report number ?
-//            *ptr++ = 0x00; // ?
             *ptr++ = CMD_PRIME_RECV_BACKUP;
-            res = prime_send_data(handle, pkt);
+            res = write_vtl_pkt(handle, pkt);
             prime_vtl_pkt_del(pkt);
         }
         else {
@@ -605,6 +657,8 @@ HPEXPORT int HPCALL calc_prime_s_recv_backup(calc_handle * handle) {
 HPEXPORT int HPCALL calc_prime_r_recv_backup(calc_handle * handle, files_var_entry *** out_vars) {
     int res;
     if (handle != NULL) {
+        // TODO: in order to be more robust against packet losses,
+        // rewrite this code to read as much as possible, then attempt to split data according to file headers.
         uint32_t count = 0;
         files_var_entry ** entries = hpfiles_ve_create_array(count);
         if (entries != NULL) {
@@ -656,7 +710,7 @@ HPEXPORT int HPCALL calc_prime_r_recv_backup(calc_handle * handle, files_var_ent
 HPEXPORT int HPCALL calc_prime_s_send_key(calc_handle * handle, uint32_t code) {
     int res;
     if (handle != NULL) {
-        prime_vtl_pkt * pkt = prime_vtl_pkt_new(8);
+        prime_vtl_pkt * pkt = prime_vtl_pkt_new(7);
         if (pkt != NULL) {
             uint8_t * ptr;
 
@@ -669,7 +723,7 @@ HPEXPORT int HPCALL calc_prime_s_send_key(calc_handle * handle, uint32_t code) {
             *ptr++ = 0x00;
             *ptr++ = 0x01;
             *ptr++ = (uint8_t)code;
-            res = prime_send_data(handle, pkt);
+            res = write_vtl_pkt(handle, pkt);
             prime_vtl_pkt_del(pkt);
         }
         else {
@@ -687,8 +741,8 @@ HPEXPORT int HPCALL calc_prime_s_send_key(calc_handle * handle, uint32_t code) {
 HPEXPORT int HPCALL calc_prime_r_send_key(calc_handle * handle) {
     int res = 0;
     if (handle != NULL) {
-        // There doesn't seem anything to do, beyond eliminating packets starting with 0xFF.
-        res = calc_prime_r_check_ready(handle, NULL, NULL);
+        // There doesn't seem to be anything to do.
+        //res = calc_prime_r_check_ready(handle, NULL, NULL);
     }
     else {
         hpcalcs_error("%s: handle is NULL", __FUNCTION__);
@@ -699,7 +753,7 @@ HPEXPORT int HPCALL calc_prime_r_send_key(calc_handle * handle) {
 HPEXPORT int HPCALL calc_prime_s_send_chat(calc_handle * handle, const uint16_t * data, uint32_t size) {
     int res;
     if (handle != NULL) {
-        prime_vtl_pkt * pkt = prime_vtl_pkt_new(size + 7);
+        prime_vtl_pkt * pkt = prime_vtl_pkt_new(size + 6);
         if (pkt != NULL) {
             uint8_t * ptr;
 
@@ -712,7 +766,7 @@ HPEXPORT int HPCALL calc_prime_s_send_chat(calc_handle * handle, const uint16_t 
             *ptr++ = (uint8_t)((size >>  8) & 0xFF);
             *ptr++ = (uint8_t)((size      ) & 0xFF);
             memcpy(ptr, data, size);
-            res = prime_send_data(handle, pkt);
+            res = write_vtl_pkt(handle, pkt);
             prime_vtl_pkt_del(pkt);
         }
         else {

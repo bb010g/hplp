@@ -10,17 +10,25 @@ the install_hplp.sh script provided alongside this README
 automates part of the build process.
 
 
-Status (2013/12/23)
+Status (2013/12/27)
 -------------------
 The code base does:
 * work on Windows, Linux and MacOS X;
-* support communication with a single Prime calculator connected to the
-  computer. The communication is known to work with the "SDKV0.30" firmware
-  version from mid-August 2013, and seems to work with the "SDKV0.32" firmware
-  version from late November 2013, but might not work with other older or
-  newer versions, if HP performs backwards-incompatible changes in the
-  protocol (like TI does);
-* implement ten operations (without _known_ bugs):
+* provide a terminal-based UI: the test program "test_hpcalcs";
+* communicate with:
+  * a single Prime calculator connected to the computer (good support);
+  * the Prime emulator (mild support; due to a bug in libhpcalcs, which doesn't
+    close the communication properly, the emulator needs to be restarted after
+    test_hpcalcs exits);
+  The communication is known to work with the "SDKV0.30" firmware version
+  from mid-August 2013, and the "SDKV0.32" firmware version from late November
+  2013, or the equivalent emulator versions, but might not work with other
+  older or newer versions, if HP performs backwards-incompatible changes in
+  the protocol (like TI does).
+  There's a bit of support for the 39gII emulator (which is, on a low level,
+  very close to the Prime emulator). However, some of the upper layers need a
+  rework (which I already knew) for gaining good 39gII emulator support.
+* implement 10 operations (without _known_ bugs):
   * ready check;
   * get calculator information;
   * set date and time;
@@ -32,13 +40,10 @@ The code base does:
   * send key (remote control);
   * send chat;
   * receive chat;
-* provide a terminal-based UI: the test program "test_hpcalcs".
 
 The code base doesn't:
 * perform color conversion on PNG screenshots (libhpcalcs should use libpng to
   uncompress the files, mangle pixels, and recompress to PNG);
-* provide a way to select one of multiple HP calculators (probing USB
-  devices);
 * provide a user-friendly GUI for the above, but a GUI can definitely build
   upon the library easily enough;
 * implement _proper_ conversion from UTF-16 LE to other charsets on its own:
@@ -48,8 +53,9 @@ The code base doesn't:
 Goals
 -----
 Laying the groundwork for GUIs dealing with two-way communication with HP
-Prime calculators, and possibly 39gII (Prime and 39gII are similar), using
-USB HID class, and possibly later fake MSD for firmware upgrades.
+Prime and 39gII calculators and emulators. The real calculators are using
+USB HID class for normal operation, support for firmware upgrades (which uses
+some sort of fake MSD) might be added later.
 
 
 Non-goals
@@ -199,24 +205,6 @@ TODO list
 * strip out leading program metadata, if any, from .hpprgm files, like the
   UTF-16LE BOM is already stripped;
 * add support for .hpappprgm and .hpappnote files;
-* add devices probing code (the hpcables part currently assumes that the
-  calculator is plugged in and that there's a single calculator), HIDAPI
-  provides some probing functions (e.g. based on vendor);
-  Implementation notes:
-  * in order to minimize API breakage if/when implementing OS upgrade is
-    implemented, a data structure should be added for indicating what type of
-    device we're dealing with. For instance:
-struct cable_probing_info {
-    cable_model cable; // HID and MSD will be different cables
-    calc_model calc; // HID and MSD will probably be different calcs
-    union info {
-        struct usb_info {
-            uint16_t usb_vid;
-            uint16_t usb_pid;
-            enum <...> device_mode; // indicating whether HID or MSD mode
-        };
-    };
-};
 * add 39gII support, probably, as the Prime is similar to the 39gII. That's
   where the usefulness of the cables / calcs separation and cables generic
   API will become most obvious.
